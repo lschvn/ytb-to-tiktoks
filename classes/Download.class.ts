@@ -204,12 +204,11 @@ export default class Download {
             await this.ensureDirectoryExists(outputPath);
             const downloadProcess = youtubedl.exec(this.url, {
                 format: format,
-                mergeOutputFormat: "mp4",
+                recodeVideo: "mp4",
                 output: outputPath,
                 verbose: true,
             });
             await downloadProcess;
-
             await new Promise(resolve => setTimeout(resolve, 5000));
             return outputPath;
         } catch(error) {

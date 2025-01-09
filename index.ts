@@ -1,68 +1,125 @@
-/**
- * TODO:
- * - [ ] Put all the code into classes and methods
- * - [ ] Add some interaction in what the user can chose or not
- */
+import { promises as fs } from 'fs';
+import youtubedl from 'youtube-dl-exec';
+import consola from 'consola';
+import Editor from './classes/Editor.class';
+import Ffmpeg from 'fluent-ffmpeg';
+import path from 'path';
 
-import Download from "./classes/Download.class";
-import Subtitles from "./classes/Subtitles.class";
-import Editor from "./classes/Editor.class";
-import consola from "consola";
+async function downloadVideo(url: string, quality = 'best', outputFile) {
+    consola.info(`Téléchargement de la vidéo depuis : ${url} avec la qualité ${quality}...`);
+    try {
+        const options = {
+            format: quality,
+            output: outputFile,
+            recodeVideo: 'mp4',
+        };
 
-
-/**
- * const vidUrl = 'https://www.youtube.com/watch?v=it5e9jU0IiI';
- *
- * const downloader = new Download(vidUrl);
- *
- * downloader.setOutputDir('./.output');
- * const videoPath = await downloader.download("bestvideo");
- *
- * const subtitles = new Subtitles(vidUrl)
- * subtitles.setLanguage('fr');
- * await subtitles.retrieve();
- *
- *
- * const downloadAudio = new Download('https://www.youtube.com/watch?v=nh6gI_hzjdw')
- * downloadAudio.setOutputFile('audio.mp3')
- * const audioPath = await downloadAudio.download('bestaudio')
- *
- * const url = "https://www.youtube.com/watch?v=DG1OgqwbFv8"
- * const videoTop = new Download(url);
- * videoTop.setOutputFile(`video-top.mp4`);
- * const path = await videoTop.download();
- * /** *
- *
- *  * consola.info(`Video downloaded at ${path}`);
- *  *
- *  *
-*
-*
-const urlBottom = "https://www.youtube.com/watch?v=_Qey9es30cI&pp=ygUQdmlkZW8gc2F0aXNmeWluZw%3D%3D"
-    *
-const videoBottom = new Download(urlBottom);
-*
-videoBottom.setOutputFile(`video-bottom.mp4`);
-*
-const pathBottom = await videoBottom.download('bestvideo');
-*
-*
-*
-    await editor.makeShorts(path, pathBottom, '.output/output-short-helydia.mp4');
- *
- *
-*/
-
-const editor = new Editor();
-const inputPath = '.output/output-short-helydia.mp4';
-const partDuration = 1000 * 65// 60 secondes en millisecondes
-const title: string = 'Helydia et Fugu au ski';
-const outputFolder = '.output/output-short-helydia';
-
-try {
-    //splitVideo(inputPath: string, partDuration: number, title: string, outputFolder: string): Promise<string[]>
-    const outputPaths = await editor.splitVideo(inputPath, partDuration, title, outputFolder);
-    console.log('Vidéos créées :', outputPaths);
-} catch (error) {
-    console.error('Erreur lors de la découpe de la vidéo :', error);
+        // Utilisation directe de exec avec await
+        await youtubedl.exec(url, options);
+        consola.success(`Téléchargement terminé : ${outputFile}`);
+        return outputFile;
+    } catch (error) {
+        consola.error(`Erreur lors du téléchargement : ${error.message}`);
+        throw error;
+    }
 }
+
+async function mergeVideoAudio(videoPath, audioPath, outputPath) {
+    return new Promise((resolve, reject) => {
+        Ffmpeg()
+            .input(videoPath)
+            .input(audioPath)
+            .outputOptions([
+                '-c:v copy',
+                '-c:a aac',
+                '-strict experimental'
+            ]).save(outputPath)
+            .on('end', () => {
+                consola.success(`Fusion terminée : ${outputPath}`);
+                resolve(outputPath);
+            })
+            .on('error', (err) => {
+                consola.error('Erreur lors de la fusion :', err);
+                reject(err);
+            });
+    });
+}
+
+async function downloadVideoAndAudio(url, outputDir = '.output') {
+    try {
+        // Télécharger la vidéo
+        const videoOptions = {
+            format: 'bestvideo[ext=mp4]',
+            output: path.join(outputDir, 'temp_video.mp4'),
+        };
+
+        // Télécharger l'audio
+        const audioOptions = {
+            format: 'bestaudio[ext=m4a]',
+            output: path.join(outputDir, 'temp_audio.m4a'),
+        };
+
+        consola.info('Téléchargement de la vidéo...');
+        await youtubedl.exec(url, videoOptions);
+
+        consola.info('Téléchargement de l\'audio...');
+        await youtubedl.exec(url, audioOptions);
+
+        return {
+            videoPath: videoOptions.output,
+            audioPath: audioOptions.output
+        };
+    } catch (error) {
+        consola.error(`Erreur lors du téléchargement : ${error.message}`);
+        throw error;
+    }
+}
+
+async function main() {
+    try {
+        // Création du dossier .output s'il n'existe pas
+        const outputDir = '.output';
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const urlTop = 'https://www.youtube.com/watch?v=XzALa9BXSHQ';
+        const urlBottom = 'https://www.youtube.com/watch?v=YNC8bJnwwxo';
+
+        // Téléchargement de la première vidéo
+        consola.info('Téléchargement de la première vidéo...');
+        const { audioPath, videoPath } = await downloadVideoAndAudio(urlTop, outputDir);
+
+        // Fusion audio/vidéo
+        const pathTop = path.join(outputDir, 'output.mp4');
+        await mergeVideoAudio(videoPath, audioPath, pathTop);
+
+        // Téléchargement de la seconde vidéo
+        consola.info('Téléchargement de la seconde vidéo...');
+        const pathBottom = path.join(outputDir, 'video-bottom.mp4');
+        await downloadVideo(urlBottom, 'bestvideo[ext=mp4]', pathBottom);
+
+        // Création du short
+        const editor = new Editor();
+        const outputShortPath = path.join(outputDir, 'output-short.mp4');
+        await editor.makeShorts(pathTop, pathBottom, outputShortPath);
+
+        // Découpage en parties
+        const partDuration = 1000 * 105;
+        const title = 'LES OBJETS INSOLITES';
+        const outputFolder = path.join(outputDir, 'short');
+
+        await fs.mkdir(outputFolder, { recursive: true });
+        const outputPaths = await editor.splitVideo(outputShortPath, partDuration, title, outputFolder);
+        consola.success('Vidéos créées :', outputPaths);
+
+        // Nettoyage des fichiers temporaires
+        await fs.unlink(videoPath);
+        await fs.unlink(audioPath);
+    } catch (error) {
+        consola.error('Une erreur est survenue :', error);
+        process.exit(1);
+    }
+}
+
+main().catch((error) => {
+    consola.error('Une erreur inattendue est survenue :', error.message);
+});

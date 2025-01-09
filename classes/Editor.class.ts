@@ -40,18 +40,39 @@ import path from "node:path";
 export default class Editor {
     constructor() {
         this.ffmpegInit();
-        ffmpeg.setFfprobePath('/home/louis/Documents/code/ytb-to-tiktoks/node_modules/@ffprobe-installer/linux-x64/ffprobe');
     }
 
     private ffmpegInit() {
-        consola.info('Initializing ffmpeg and ffprobe...');
+        consola.info("Initializing ffmpeg and ffprobe...");
         try {
-            ffmpeg.setFfmpegPath(ffmpegInstaller.path)
-            consola.box(ffprobeInstaller.path)
-            consola.success('ffmpeg and ffprobe initialized');
+            // Définir le chemin de FFmpeg depuis le package
+            ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+            // Vérifier si FFprobe est disponible globalement
+            const globalFfprobePath = this.findGlobalExecutable("ffprobe");
+            if (globalFfprobePath) {
+                ffmpeg.setFfprobePath(globalFfprobePath);
+                consola.success(`Using global FFprobe: ${globalFfprobePath}`);
+            } else {
+                // Fallback vers le chemin fourni par @ffprobe-installer
+                ffmpeg.setFfprobePath(ffprobeInstaller.path);
+                consola.success(`Using FFprobe from installer: ${ffprobeInstaller.path}`);
+            }
+
+            consola.success("FFmpeg and FFprobe initialized successfully");
+        } catch (e) {
+            consola.error("Error initializing FFmpeg/FFprobe:", e);
         }
-        catch(e) {
-            consola.error(e);
+    }
+
+    private findGlobalExecutable(executable) {
+        try {
+            const { execSync } = require("child_process");
+            const command = process.platform === "win32" ? `where ${executable}` : `which ${executable}`;
+            const path = execSync(command).toString().trim();
+            return path || null;
+        } catch {
+            return null;
         }
     }
 
@@ -388,97 +409,119 @@ export default class Editor {
     }
 
     public async splitVideo(inputPath: string, partDuration: number, title: string, outputFolder: string): Promise<string[]> {
-        const outputPaths: string[] = [];
-
-
-        partDuration = partDuration / 1000;
-
-        const totalDuration = await this.getVideoDuration(inputPath);
-        consola.warn("This process may take a while depending on the video size");
-        console.log(totalDuration);
-        const numParts = Math.ceil(totalDuration / partDuration);
-        consola.info('Total video duration:', totalDuration);
-        consola.info('Number of parts:', numParts);
-
-        for (let i = 0; i < numParts; i++) {
-            const start = i * partDuration;
-            const outputPath = path.join(outputFolder, `${title}-${i + 1}.mp4`);
-            outputPaths.push(outputPath);
-
-            const progressBar = this.progressBar();
-            let duration = 0;
-            let started = false;
-
-
-            consola.start(`Creating part ${i + 1}...`);
-            await new Promise<void>((resolve, reject) => {
-                ffmpeg(inputPath)
-                    .setStartTime(start)
-                    .setDuration(partDuration)
-                    .videoFilters([
-                        // First text (large and centered on a black box)
-                        {
-                            filter: 'drawtext',
-                            options: {
-                                text: this.formatText(`Partie ${i + 1}`),
-                                fontcolor: 'white',
-                                fontsize: '100', // Increased font size
-                                box: '1',
-                                boxcolor: 'black@1',
-                                boxborderw: '20',
-                                //boxborderradius: '25',
-                                x: '(w-text_w)/2', // Centered horizontally
-                                y: '(h-text_h*2+65)/2', // Positioned to make room for second text
-                            }
-                        },
-                        // Second text (black on a red box)
-                        {
-                            filter: 'drawtext',
-                            options: {
-                                text: this.formatText(title),
-                                fontcolor: 'black',
-                                fontsize: '100',
-                                box: '1',
-                                boxcolor: 'red@0.8',
-                                boxborderw: '25',
-                                //boxborderradius: '25',
-                                x: '(w-text_w)/2', // Centered horizontally
-                                y: '((h-text_h*2)/2)+text_h+75', // Positioned below the first text
-                            }
-                        }
-                    ])
-                    .output(outputPath)
-                    .on("codecData", (data) => {
-                        duration = parseInt(data.duration.replace(/:/g, ''));
-                        progressBar.start(duration, 0);
-                        started = true;
-                    })
-                    .on("progress", (progress) => {
-                        if (started) {
-                            const time = parseInt(progress.timemark.replace(/:/g, ''));
-                            progressBar.update(time);
-                        }
-                    })
-                    .on('end', () => {
-                        consola.success(`Part ${i + 1} created: ${outputPath}`);
-                        resolve();
-                    })
-                    .on('error', (err) => {
-                        consola.error(`Error creating part ${i + 1}:`, err);
-                        reject(err);
-                    })
-                    .run();
-            });
+        // Vérifier si le fichier d'entrée existe
+        if (!fs.existsSync(inputPath)) {
+            throw new Error(`Le fichier d'entrée n'existe pas : ${inputPath}`);
         }
 
-        return outputPaths;
+        // Créer le dossier de sortie s'il n'existe pas
+        if (!fs.existsSync(outputFolder)) {
+            fs.mkdirSync(outputFolder, { recursive: true });
+        }
+
+        const outputPaths: string[] = [];
+        partDuration = partDuration / 1000;
+
+        try {
+            const totalDuration = await this.getVideoDuration(inputPath);
+            if (!totalDuration) {
+                throw new Error("Impossible de déterminer la durée de la vidéo");
+            }
+
+            consola.warn("Ce processus peut prendre du temps selon la taille de la vidéo");
+            console.log('Durée totale:', totalDuration);
+            const numParts = Math.ceil(totalDuration / partDuration);
+            consola.info('Durée totale de la vidéo:', totalDuration);
+            consola.info('Nombre de parties:', numParts);
+
+            for (let i = 0; i < numParts; i++) {
+                const start = i * partDuration;
+                const outputPath = path.join(outputFolder, `${title}-${i + 1}.mp4`);
+                outputPaths.push(outputPath);
+
+                const progressBar = this.progressBar();
+                let duration = 0;
+                let started = false;
+
+
+                consola.start(`Creating part ${i + 1}...`);
+                await new Promise<void>((resolve, reject) => {
+                    ffmpeg(inputPath)
+                        .setStartTime(start)
+                        .setDuration(partDuration)
+                        .videoFilters([
+                            // First text (large and centered on a black box)
+                            {
+                                filter: 'drawtext',
+                                options: {
+                                    text: this.formatText(`Partie ${i + 1}`),
+                                    fontcolor: 'white',
+                                    fontsize: '100', // Increased font size
+                                    box: '1',
+                                    boxcolor: 'black@1',
+                                    boxborderw: '20',
+                                    //boxborderradius: '25',
+                                    x: '(w-text_w)/2', // Centered horizontally
+                                    y: '(h-text_h*2+65)/2', // Positioned to make room for second text
+                                }
+                            },
+                            // Second text (black on a red box)
+                            {
+                                filter: 'drawtext',
+                                options: {
+                                    text: this.formatText(title),
+                                    fontcolor: 'black',
+                                    fontsize: '100',
+                                    box: '1',
+                                    boxcolor: 'red@0.8',
+                                    boxborderw: '25',
+                                    //boxborderradius: '25',
+                                    x: '(w-text_w)/2', // Centered horizontally
+                                    y: '((h-text_h*2)/2)+text_h+75', // Positioned below the first text
+                                }
+                            }
+                        ])
+                        .output(outputPath)
+                        .on("codecData", (data) => {
+                            duration = parseInt(data.duration.replace(/:/g, ''));
+                            progressBar.start(duration, 0);
+                            started = true;
+                        })
+                        .on("progress", (progress) => {
+                            if (started) {
+                                const time = parseInt(progress.timemark.replace(/:/g, ''));
+                                progressBar.update(time);
+                            }
+                        })
+                        .on('end', () => {
+                            consola.success(`Part ${i + 1} created: ${outputPath}`);
+                            resolve();
+                        })
+                        .on('error', (err) => {
+                            consola.error(`Error creating part ${i + 1}:`, err);
+                            reject(err);
+                        })
+                        .run();
+                });
+            }
+
+            return outputPaths;
+        } catch (error) {
+            consola.error("Erreur lors du traitement de la vidéo:", error);
+            throw error;
+        }
     }
 
     private async getVideoDuration(inputPath: string): Promise<number> {
         return new Promise((resolve, reject) => {
+            if (!fs.existsSync(inputPath)) {
+                reject(new Error(`Le fichier n'existe pas : ${inputPath}`));
+                return;
+            }
+
             ffmpeg.ffprobe(inputPath, (err, metadata) => {
                 if (err) {
-                    consola.warn('Error getting video metadata:', err);
+                    consola.error('Erreur lors de la lecture des métadonnées:', err);
                     reject(err);
                 } else {
                     resolve(metadata.format.duration);
